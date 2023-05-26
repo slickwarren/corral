@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -35,6 +36,7 @@ corral create k3s ghcr.io/rancher/k3s
 corral create k3s-ha -v controlplane_count=3 ghcr.io/rancher/k3s
 corral create k3s-custom /home/rancher/issue-1234
 `
+const ED25519_KEY_TYPE = "ed25519"
 
 func NewCommandCreate() *cobra.Command {
 	cmd := &cobra.Command{
@@ -138,9 +140,16 @@ func create(cmd *cobra.Command, args []string) error {
 
 	if corr.Vars["corral_private_key"] == nil && corr.Vars["corral_public_key"] == nil {
 		logrus.Info("generating ssh keys")
-		privkey, _ := generatePrivateKey(2048)
-		pubkey, _ := generatePublicKey(&privkey.PublicKey)
-		corr.PrivateKey = string(encodePrivateKeyToPEM(privkey))
+		var pubkey []byte
+		if corr.Vars["corral_ssh_key_type"] == ED25519_KEY_TYPE {
+			var edprivkey []byte
+			pubkey, edprivkey, _ = ed25519.GenerateKey(rand.Reader)
+			corr.PrivateKey = string(encodePrivateKeyToPEM(edprivkey))
+		} else {
+			privkey, _ := generateRSAPrivateKey(2048)
+			pubkey, _ = generateRSAPublicKey(&privkey.PublicKey)
+			corr.PrivateKey = string(encodeRSAPrivateKeyToPEM(privkey))
+		}
 		corr.PublicKey = string(pubkey)
 		corr.Vars["corral_public_key"] = corr.PublicKey
 		corr.Vars["corral_private_key"] = corr.PrivateKey
@@ -360,7 +369,7 @@ func executeShellCommandSync(command string, shells []*shell.Shell, vs vars.VarS
 	return nil
 }
 
-func generatePrivateKey(bits int) (*rsa.PrivateKey, error) {
+func generateRSAPrivateKey(bits int) (*rsa.PrivateKey, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
 		return nil, err
@@ -374,7 +383,7 @@ func generatePrivateKey(bits int) (*rsa.PrivateKey, error) {
 	return privateKey, nil
 }
 
-func generatePublicKey(key *rsa.PublicKey) ([]byte, error) {
+func generateRSAPublicKey(key *rsa.PublicKey) ([]byte, error) {
 	publicRsaKey, err := ssh.NewPublicKey(key)
 	if err != nil {
 		return nil, err
@@ -385,13 +394,24 @@ func generatePublicKey(key *rsa.PublicKey) ([]byte, error) {
 	return pubKeyBytes, nil
 }
 
-func encodePrivateKeyToPEM(key *rsa.PrivateKey) []byte {
+func encodeRSAPrivateKeyToPEM(key *rsa.PrivateKey) []byte {
 	privDER := x509.MarshalPKCS1PrivateKey(key)
 
 	privBlock := pem.Block{
 		Type:    "RSA PRIVATE KEY",
 		Headers: nil,
 		Bytes:   privDER,
+	}
+
+	return pem.EncodeToMemory(&privBlock)
+}
+
+func encodePrivateKeyToPEM(key []byte) []byte {
+
+	privBlock := pem.Block{
+		Type:    "ed25519 PRIVATE KEY",
+		Headers: nil,
+		Bytes:   key,
 	}
 
 	return pem.EncodeToMemory(&privBlock)
