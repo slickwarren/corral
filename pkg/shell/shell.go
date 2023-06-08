@@ -70,17 +70,17 @@ func (s *Shell) Connect() error {
 	if s.Node.BastionAddress != "" {
 		s.bastionClient, err = ssh.Dial("tcp", s.Node.BastionAddress, &sshConfig)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to dial bastion host: %w", err)
 		}
 
 		s.connection, err = s.bastionClient.Dial("tcp", s.Node.Address)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to dial connection via bastion host: %w", err)
 		}
 	} else {
 		s.connection, err = net.DialTimeout("tcp", s.Node.Address, connectionTimeout)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to dial connection: %w", err)
 		}
 	}
 

@@ -140,17 +140,22 @@ func create(cmd *cobra.Command, args []string) error {
 
 	if corr.Vars["corral_private_key"] == nil && corr.Vars["corral_public_key"] == nil {
 		logrus.Info("generating ssh keys")
-		var pubkey []byte
 		if corr.Vars["corral_ssh_key_type"] == ED25519_KEY_TYPE {
-			var edprivkey []byte
-			pubkey, edprivkey, _ = ed25519.GenerateKey(rand.Reader)
-			corr.PrivateKey = string(encodePrivateKeyToPEM(edprivkey))
+			_, privkey, _ := ed25519.GenerateKey(nil)
+			privkey = encodePrivateKeyToPEM(privkey)
+			pubkey, err := ssh.NewPublicKey(privkey.Public())
+			if err != nil {
+				logrus.Fatal("failed to generate public ed25519 key: ", err)
+			}
+
+			corr.PrivateKey = string(privkey)
+			corr.PublicKey = string(ssh.MarshalAuthorizedKey(pubkey))
 		} else {
 			privkey, _ := generateRSAPrivateKey(2048)
-			pubkey, _ = generateRSAPublicKey(&privkey.PublicKey)
-			corr.PrivateKey = string(encodeRSAPrivateKeyToPEM(privkey))
+			pubkey, _ := generateRSAPublicKey(&privkey.PublicKey)
+			corr.PrivateKey = string(encodePrivateKeyToPEM(privkey))
+			corr.PublicKey = string(pubkey)
 		}
-		corr.PublicKey = string(pubkey)
 		corr.Vars["corral_public_key"] = corr.PublicKey
 		corr.Vars["corral_private_key"] = corr.PrivateKey
 	} else {
@@ -189,7 +194,6 @@ func create(cmd *cobra.Command, args []string) error {
 		if cmd.Parallel == nil {
 			cmd.Parallel = &[]bool{true}[0]
 		}
-
 		if cmd.Command != "" {
 			logrus.Infof("[%d/%d] running command %s", i+1, len(pkg.Manifest.Commands), cmd.Command)
 
@@ -394,24 +398,31 @@ func generateRSAPublicKey(key *rsa.PublicKey) ([]byte, error) {
 	return pubKeyBytes, nil
 }
 
-func encodeRSAPrivateKeyToPEM(key *rsa.PrivateKey) []byte {
-	privDER := x509.MarshalPKCS1PrivateKey(key)
+func encodePrivateKeyToPEM(key any) []byte {
+	blockType := "PRIVATE KEY"
+	var privDER []byte
+	var err error
+	switch key.(type) {
+	case *rsa.PrivateKey:
+		privDER = x509.MarshalPKCS1PrivateKey(key.(*rsa.PrivateKey))
+		blockType = "RSA PRIVATE KEY"
+	case *ed25519.PrivateKey:
+		privDER, err = x509.MarshalPKCS8PrivateKey(key.(*ed25519.PrivateKey))
+		if err != nil {
+			logrus.Fatal("failed to marshal PKCS8 private key: ", err)
+		}
+	case []byte:
+		privDER = key.([]byte)
 
-	privBlock := pem.Block{
-		Type:    "RSA PRIVATE KEY",
-		Headers: nil,
-		Bytes:   privDER,
+	default:
+		logrus.Fatalf("unsupported private key type: %T", key)
+		return nil
 	}
 
-	return pem.EncodeToMemory(&privBlock)
-}
-
-func encodePrivateKeyToPEM(key []byte) []byte {
-
 	privBlock := pem.Block{
-		Type:    "ed25519 PRIVATE KEY",
+		Type:    blockType,
 		Headers: nil,
-		Bytes:   key,
+		Bytes:   privDER,
 	}
 
 	return pem.EncodeToMemory(&privBlock)
